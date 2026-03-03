@@ -1,4 +1,5 @@
 import asyncio
+import requests
 import time
 import threading
 import json
@@ -7,13 +8,8 @@ import random
 import argparse
 from datetime import datetime
 from telethon import TelegramClient, events
-from telethon.tl.functions.messages import SetBotCommandsRequest
-from telethon.tl.types import BotCommand, BotCommandScopeDefault, MessageEntityBotCommand
-from telethon.errors import FloodWaitError
 import base64
 import urllib.request
-from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.types import ChannelParticipantsSearch
 
 TOKEN = ""
 BOT_MASTER = ""
@@ -157,52 +153,77 @@ def is_banned(user_id):
 def is_dm_disabled(user_id):
     return user_id in dm_disabled_users
 
-async def set_my_commands():
-    if not client:
+# Funciones con requests para la API de Telegram
+def send_message(chat_id, text, reply_to=None):
+    if not TOKEN:
         return
-    commands = [
-        BotCommand(command="start", description="Iniciar el bot"),
-        BotCommand(command="friends", description="Agregar/quitar amigos (admin)"),
-        BotCommand(command="admin", description="Agregar/quitar admins (solo master)"),
-        BotCommand(command="ban", description="Banear usuario (admin+)"),
-        BotCommand(command="quote", description="Guardar mensaje (friends+)"),
-        BotCommand(command="post", description="Publicar en canal (friends+)"),
-        BotCommand(command="postdm", description="Enviar a todos los chats (friends+)"),
-        BotCommand(command="toggledm", description="Activar/desactivar reenvío DM"),
-        BotCommand(command="random", description="Obtener mensaje aleatorio"),
-        BotCommand(command="info", description="Información del bot (admin+)"),
-        BotCommand(command="help", description="Ayuda")
-    ]
-    try:
-        await client(SetBotCommandsRequest(
-            scope=BotCommandScopeDefault(),
-            lang_code='',
-            commands=commands
-        ))
-    except:
-        pass
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    if reply_to:
+        data["reply_parameters"] = {"message_id": reply_to}
+    requests.post(url, json=data)
 
-async def get_chat_member(user_identifier):
-    try:
-        if str(user_identifier).startswith('@'):
-            entity = await client.get_entity(user_identifier)
-            return entity.id
-        else:
-            return int(user_identifier)
-    except:
+def react_to_message(chat_id, message_id, emoji):
+    if not TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TOKEN}/setMessageReaction"
+    data = {"chat_id": chat_id, "message_id": message_id, "reaction": [{"type": "emoji", "emoji": emoji}]}
+    requests.post(url, json=data)
+
+def copy_message(from_chat_id, message_id, to_chat_id):
+    if not TOKEN:
         return None
+    url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
+    data = {"chat_id": to_chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
+    response = requests.post(url, data=data)
+    return response.json() if response.status_code == 200 else None
 
-async def get_all_chats():
-    chats = []
-    async for dialog in client.iter_dialogs():
-        if dialog.is_user and dialog.id != BOT_MASTER_ID:
-            chats.append(dialog.id)
-    return chats
+def get_chat_member(user_id):
+    if not TOKEN:
+        return None
+    url = f"https://api.telegram.org/bot{TOKEN}/getChat"
+    data = {"chat_id": user_id}
+    response = requests.post(url, data=data)
+    return response.json() if response.status_code == 200 else None
 
-def run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+def get_chats():
+    if not TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+    params = {"timeout": 0, "allowed_updates": ["message"]}
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        result = response.json()
+        if result.get("ok"):
+            chats = set()
+            for update in result["result"]:
+                if "message" in update:
+                    chat = update["message"]["chat"]
+                    chat_id = chat["id"]
+                    if chat_id > 0 and chat_id != BOT_MASTER_ID:
+                        chats.add(chat_id)
+            return list(chats)
+    return []
+
+def set_my_commands():
+    if not TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
+    commands = [
+        {"command": "start", "description": "Iniciar el bot"},
+        {"command": "friends", "description": "Agregar/quitar amigos (admin)"},
+        {"command": "admin", "description": "Agregar/quitar admins (solo master)"},
+        {"command": "ban", "description": "Banear usuario (admin+)"},
+        {"command": "quote", "description": "Guardar mensaje (friends+)"},
+        {"command": "post", "description": "Publicar en canal (friends+)"},
+        {"command": "postdm", "description": "Enviar a todos los chats (friends+)"},
+        {"command": "toggledm", "description": "Activar/desactivar reenvío DM"},
+        {"command": "random", "description": "Obtener mensaje aleatorio"},
+        {"command": "info", "description": "Información del bot (admin+)"},
+        {"command": "help", "description": "Ayuda"}
+    ]
+    data = {"commands": commands}
+    requests.post(url, json=data)
 
 @events.register(events.NewMessage)
 async def handler(event):
@@ -216,11 +237,27 @@ async def handler(event):
     if not user_id:
         return
     
+    if chat_id != BOT_MASTER_ID and not is_banned(user_id):
+        if not is_dm_disabled(user_id):
+            url = f"https://api.telegram.org/bot{TOKEN}/forwardMessage"
+            data = {
+                "chat_id": BOT_MASTER_ID,
+                "from_chat_id": chat_id,
+                "message_id": event.message.id
+            }
+            response = requests.post(url, data=data)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("ok"):
+                    react_to_message(chat_id, event.message.id, "👌")
+        else:
+            react_to_message(chat_id, event.message.id, "🔇")
+    
     if event.message.text:
         text = event.message.text
         
         if text == "/start":
-            await event.respond(start_msg)
+            send_message(chat_id, start_msg)
         
         elif text.startswith("/friends"):
             if not is_admin(user_id):
@@ -228,7 +265,17 @@ async def handler(event):
             parts = text.split(maxsplit=1)
             user_input = parts[1] if len(parts) > 1 else None
             if user_input:
-                target_id = await get_chat_member(user_input)
+                target_id = None
+                if str(user_input).startswith("@"):
+                    chat_info = get_chat_member(user_input)
+                    if chat_info and chat_info.get("ok"):
+                        target_id = chat_info["result"]["id"]
+                else:
+                    try:
+                        target_id = int(user_input)
+                    except:
+                        pass
+                
                 if target_id and target_id != BOT_MASTER_ID:
                     if target_id in friends:
                         friends.remove(target_id)
@@ -242,7 +289,17 @@ async def handler(event):
             parts = text.split(maxsplit=1)
             user_input = parts[1] if len(parts) > 1 else None
             if user_input:
-                target_id = await get_chat_member(user_input)
+                target_id = None
+                if str(user_input).startswith("@"):
+                    chat_info = get_chat_member(user_input)
+                    if chat_info and chat_info.get("ok"):
+                        target_id = chat_info["result"]["id"]
+                else:
+                    try:
+                        target_id = int(user_input)
+                    except:
+                        pass
+                
                 if target_id and target_id != BOT_MASTER_ID:
                     if target_id in admins:
                         admins.remove(target_id)
@@ -256,7 +313,17 @@ async def handler(event):
             parts = text.split(maxsplit=1)
             user_input = parts[1] if len(parts) > 1 else None
             if user_input:
-                target_id = await get_chat_member(user_input)
+                target_id = None
+                if str(user_input).startswith("@"):
+                    chat_info = get_chat_member(user_input)
+                    if chat_info and chat_info.get("ok"):
+                        target_id = chat_info["result"]["id"]
+                else:
+                    try:
+                        target_id = int(user_input)
+                    except:
+                        pass
+                
                 if target_id and target_id != BOT_MASTER_ID and not is_admin(target_id):
                     if target_id in banned_users:
                         banned_users.remove(target_id)
@@ -269,24 +336,27 @@ async def handler(event):
                 return
             if not is_friend(user_id) and user_id != BOT_MASTER_ID:
                 return
+            
             if event.message.reply_to_msg_id:
                 reply_msg = await event.message.get_reply_message()
                 if reply_msg:
-                    forwarded = await client.send_message(BOT_MASTER_ID, reply_msg)
-                    if forwarded:
+                    result = copy_message(chat_id, reply_msg.id, BOT_MASTER_ID)
+                    if result and result.get("ok"):
                         first_name = event.sender.first_name or "Anónimo"
                         quote_data = {
-                            "message_id": forwarded.id,
+                            "message_id": result["result"]["message_id"],
                             "chat_id": BOT_MASTER_ID,
                             "first_name": first_name,
                             "date": datetime.now().isoformat()
                         }
                         quotes.append(quote_data)
                         save_quotes()
-                        await event.respond("✅ Mensaje guardado en quotes")
-                        await event.message.react("👍")
+                        send_message(chat_id, "✅ Mensaje guardado en quotes", event.message.id)
+                        react_to_message(chat_id, event.message.id, "👍")
+                    else:
+                        send_message(chat_id, "❌ Error al guardar el mensaje", event.message.id)
             else:
-                await event.respond("Este comando debe usarse en respuesta a un mensaje")
+                send_message(chat_id, "Este comando debe usarse en respuesta a un mensaje", event.message.id)
         
         elif text == "/post":
             if is_banned(user_id):
@@ -294,88 +364,96 @@ async def handler(event):
             if not is_friend(user_id) and user_id != BOT_MASTER_ID:
                 return
             if not BOT_CHANNEL:
-                await event.respond("No hay canal configurado")
+                send_message(chat_id, "No hay canal configurado", event.message.id)
                 return
+            
             if event.message.reply_to_msg_id:
                 reply_msg = await event.message.get_reply_message()
                 if reply_msg:
-                    try:
-                        channel_id = int(BOT_CHANNEL) if BOT_CHANNEL.lstrip('-').isdigit() else BOT_CHANNEL
-                        await client.send_message(channel_id, reply_msg)
+                    channel_id = BOT_CHANNEL
+                    if channel_id.startswith('@'):
+                        channel_info = get_chat_member(channel_id)
+                        if channel_info and channel_info.get("ok"):
+                            channel_id = channel_info["result"]["id"]
+                    
+                    result = copy_message(chat_id, reply_msg.id, channel_id)
+                    if result and result.get("ok"):
                         first_name = event.sender.first_name or "Anónimo"
-                        await client.send_message(channel_id, f"By: {first_name}")
-                        await event.respond("✅ Mensaje publicado en el canal")
-                        await event.message.react("👍")
-                    except:
-                        await event.respond("❌ Error al publicar el mensaje")
+                        send_message(channel_id, f"By: {first_name}")
+                        send_message(chat_id, "✅ Mensaje publicado en el canal", event.message.id)
+                        react_to_message(chat_id, event.message.id, "👍")
+                    else:
+                        send_message(chat_id, "❌ Error al publicar el mensaje", event.message.id)
             else:
-                await event.respond("Este comando debe usarse en respuesta a un mensaje")
+                send_message(chat_id, "Este comando debe usarse en respuesta a un mensaje", event.message.id)
         
         elif text == "/postdm":
             if is_banned(user_id):
                 return
             if not is_friend(user_id) and user_id != BOT_MASTER_ID:
                 return
+            
             if event.message.reply_to_msg_id:
                 reply_msg = await event.message.get_reply_message()
                 if reply_msg:
-                    chats = await get_all_chats()
+                    chats = get_chats()
                     first_name = event.sender.first_name or "Anónimo"
                     sent_count = 0
-                    for chat_id in chats:
-                        try:
-                            await client.send_message(chat_id, reply_msg)
-                            await client.send_message(chat_id, f"By: {first_name}")
-                            sent_count += 1
-                            await asyncio.sleep(0.1)
-                        except:
-                            continue
-                    await event.respond(f"✅ Mensaje enviado a {sent_count} chats")
-                    await event.message.react("👍")
+                    
+                    for chat in chats:
+                        if chat != BOT_MASTER_ID:
+                            result = copy_message(chat_id, reply_msg.id, chat)
+                            if result and result.get("ok"):
+                                send_message(chat, f"By: {first_name}")
+                                sent_count += 1
+                            time.sleep(0.1)
+                    
+                    send_message(chat_id, f"✅ Mensaje enviado a {sent_count} chats", event.message.id)
+                    react_to_message(chat_id, event.message.id, "👍")
             else:
-                await event.respond("Este comando debe usarse en respuesta a un mensaje")
+                send_message(chat_id, "Este comando debe usarse en respuesta a un mensaje", event.message.id)
         
         elif text == "/toggledm":
             if is_banned(user_id):
                 return
+            
             if user_id in dm_disabled_users:
                 dm_disabled_users.remove(user_id)
                 status = "activado"
             else:
                 dm_disabled_users.append(user_id)
                 status = "desactivado"
+            
             save_dm_disabled()
-            await event.respond(f"✅ Reenvío de mensajes {status}")
-            await event.message.react("👍")
+            send_message(chat_id, f"✅ Reenvío de mensajes {status}", event.message.id)
+            react_to_message(chat_id, event.message.id, "👍")
         
         elif text == "/random":
             if is_banned(user_id):
                 return
+            
             if not quotes:
-                await event.respond("No hay quotes disponibles")
+                send_message(chat_id, "No hay quotes disponibles")
                 return
+            
             quote = random.choice(quotes)
-            try:
-                msg = await client.get_messages(quote["chat_id"], ids=quote["message_id"])
-                if msg:
-                    await client.send_message(chat_id, msg)
-                    await client.send_message(chat_id, f"By: {quote['first_name']}")
-                else:
-                    quotes.remove(quote)
-                    save_quotes()
-                    await event.respond("El quote ya no está disponible")
-            except:
+            result = copy_message(quote["chat_id"], quote["message_id"], chat_id)
+            
+            if result and result.get("ok"):
+                send_message(chat_id, f"By: {quote['first_name']}")
+            else:
                 quotes.remove(quote)
                 save_quotes()
-                await event.respond("El quote ya no está disponible")
+                send_message(chat_id, "El quote ya no está disponible")
         
         elif text == "/info":
             if is_banned(user_id):
                 return
             if not is_admin(user_id):
                 return
-            chats = await get_all_chats()
-            await event.respond(f"El bot tiene {len(chats)} chats")
+            
+            chats = get_chats()
+            send_message(chat_id, f"El bot tiene {len(chats)} chats", event.message.id)
         
         elif text == "/help":
             help_text = (
@@ -391,37 +469,20 @@ async def handler(event):
                 "/info - Información del bot (admin+)\n"
                 "/help - Esta ayuda"
             )
-            await event.respond(help_text)
-        
-        elif chat_id != BOT_MASTER_ID and not is_banned(user_id):
-            if not is_dm_disabled(user_id):
-                try:
-                    await client.send_message(BOT_MASTER_ID, event.message)
-                    await event.message.react("👌")
-                except:
-                    pass
-            else:
-                await event.message.react("🔇")
-    
-    elif chat_id != BOT_MASTER_ID and not is_banned(user_id):
-        if not is_dm_disabled(user_id):
-            try:
-                await client.send_message(BOT_MASTER_ID, event.message)
-                await event.message.react("👌")
-            except:
-                pass
-        else:
-            await event.message.react("🔇")
+            send_message(chat_id, help_text)
 
 async def main():
     await client.start(bot_token=TOKEN)
-    print("Bot iniciado correctamente")
+    print("✅ Bot iniciado correctamente")
+    
+    set_my_commands()
+    
     client.add_event_handler(handler)
-    await set_my_commands()
+    
     await client.run_until_disconnected()
 
-def start_bot():
+def run_bot():
     asyncio.run(main())
 
 if __name__ == "__main__":
-    start_bot()
+    run_bot()
