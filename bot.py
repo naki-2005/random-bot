@@ -13,6 +13,7 @@ BOT_MASTER_ID = 0
 start_msg = ""
 REPO = ""
 BARER = ""
+BOT_CHANNEL = ""
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -21,6 +22,7 @@ def get_args():
     parser.add_argument("-msg", "--message", help="Mensaje de start", default="")
     parser.add_argument("-repo", "--repo", help="Repo usuario/repo", default="")
     parser.add_argument("-barer", "--barer", help="Token de GitHub", default="")
+    parser.add_argument("-bc", "--botchannel", help="Canal del bot @channel,-ID", default="")
     return parser.parse_args()
 
 args = get_args()
@@ -35,11 +37,13 @@ if args.master and "," in args.master:
 start_msg = args.message
 REPO = args.repo
 BARER = args.barer
+BOT_CHANNEL = args.botchannel
 
 ADMINS_FILE = "admins.json"
 FRIENDS_FILE = "friends.json"
 QUOTES_FILE = "quotes.json"
 BANNED_FILE = "banned.json"
+DM_SETTINGS_FILE = "dm_settings.json"
 
 def load_data(filename):
     if os.path.exists(filename):
@@ -115,6 +119,10 @@ def save_banned():
     save_data(BANNED_FILE, banned_users)
     save_to_github(BANNED_FILE, f"data/{BANNED_FILE}", "Actualización de banned")
 
+def save_dm_settings():
+    save_data(DM_SETTINGS_FILE, dm_enabled_users)
+    save_to_github(DM_SETTINGS_FILE, f"data/{DM_SETTINGS_FILE}", "Actualización de DM settings")
+
 admins = load_data(ADMINS_FILE)
 if BOT_MASTER_ID and BOT_MASTER_ID not in admins:
     admins.append(BOT_MASTER_ID)
@@ -123,6 +131,7 @@ if BOT_MASTER_ID and BOT_MASTER_ID not in admins:
 friends = load_data(FRIENDS_FILE)
 quotes = load_data(QUOTES_FILE)
 banned_users = load_data(BANNED_FILE)
+dm_enabled_users = load_data(DM_SETTINGS_FILE)
 
 def is_admin(user_id):
     return user_id == BOT_MASTER_ID or user_id in admins
@@ -143,7 +152,11 @@ def set_my_commands():
         {"command": "admin", "description": "Agregar/quitar admins (solo master)"},
         {"command": "ban", "description": "Banear usuario (admin+)"},
         {"command": "quote", "description": "Guardar mensaje (friends+)"},
+        {"command": "post", "description": "Publicar en canal (friends+)"},
+        {"command": "postdm", "description": "Enviar a todos los chats (friends+)"},
+        {"command": "toggledm", "description": "Activar/desactivar reenvío DM"},
         {"command": "random", "description": "Obtener mensaje aleatorio"},
+        {"command": "info", "description": "Información del bot (admin+)"},
         {"command": "help", "description": "Ayuda"}
     ]
     data = {"commands": commands}
@@ -171,6 +184,9 @@ def forward_message(from_chat_id, message_id, original_chat_id, original_message
     if from_chat_id == BOT_MASTER_ID or is_banned(from_chat_id):
         react_to_message(original_chat_id, original_message_id, "🚫")
         return
+    if from_chat_id not in dm_enabled_users:
+        react_to_message(original_chat_id, original_message_id, "🔇")
+        return
     url = f"https://api.telegram.org/bot{TOKEN}/forwardMessage"
     data = {"chat_id": BOT_MASTER_ID, "from_chat_id": from_chat_id, "message_id": message_id}
     response = requests.post(url, data=data)
@@ -195,11 +211,29 @@ def get_chat_member(user_id):
     response = requests.post(url, data=data)
     return response.json() if response.status_code == 200 else None
 
+def get_chats():
+    if not TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+    params = {"timeout": 0, "allowed_updates": ["message"]}
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        result = response.json()
+        if result.get("ok"):
+            chats = set()
+            for update in result["result"]:
+                if "message" in update:
+                    chat = update["message"]["chat"]
+                    chat_id = chat["id"]
+                    if chat_id > 0 and chat_id != BOT_MASTER_ID:
+                        chats.add(chat_id)
+            return list(chats)
+    return []
+
 def add_or_remove_user(command, user_input, from_user_id):
     global admins, friends
     
     if not user_input:
-        send_message(from_user_id, "Debes especificar un @usuario o ID")
         return
     
     user_id = None
@@ -211,57 +245,41 @@ def add_or_remove_user(command, user_input, from_user_id):
         if chat_info and chat_info.get("ok"):
             user_id = chat_info["result"]["id"]
         else:
-            send_message(from_user_id, f"No se puede acceder a {user_input}. El usuario debe iniciar el bot primero.")
             return
     else:
         try:
             user_id = int(user_input)
-            chat_info = get_chat_member(user_id)
-            if not (chat_info and chat_info.get("ok")):
-                send_message(from_user_id, f"El usuario {user_id} debe iniciar el bot primero.")
-                return
         except:
-            send_message(from_user_id, "Formato inválido. Usa @usuario o ID numérico")
             return
     
     target_list = friends if command == "/friends" else admins
     
     if command == "/admin" and from_user_id != BOT_MASTER_ID:
-        send_message(from_user_id, "Solo el master puede gestionar admins")
         return
     
     if command == "/friends" and not is_admin(from_user_id):
-        send_message(from_user_id, "Solo admins pueden gestionar amigos")
         return
     
     if user_id == BOT_MASTER_ID:
-        send_message(from_user_id, "No puedes modificar al master")
         return
     
     if user_id in target_list:
         target_list.remove(user_id)
-        action = "eliminado de"
     else:
         target_list.append(user_id)
-        action = "agregado a"
     
     if command == "/admin":
         save_admins()
     else:
         save_friends()
-    
-    list_name = "admins" if command == "/admin" else "amigos"
-    send_message(from_user_id, f"Usuario {user_input} {action} la lista de {list_name}")
 
 def handle_ban(command, user_input, from_user_id):
     global banned_users
     
     if not is_admin(from_user_id):
-        send_message(from_user_id, "No tienes permiso para usar /ban")
         return
     
     if not user_input:
-        send_message(from_user_id, "Debes especificar un @usuario o ID")
         return
     
     user_id = None
@@ -272,36 +290,28 @@ def handle_ban(command, user_input, from_user_id):
         if chat_info and chat_info.get("ok"):
             user_id = chat_info["result"]["id"]
         else:
-            send_message(from_user_id, f"No se puede acceder a {user_input}")
             return
     else:
         try:
             user_id = int(user_input)
         except:
-            send_message(from_user_id, "Formato inválido. Usa @usuario o ID numérico")
             return
     
     if user_id == BOT_MASTER_ID or is_admin(user_id):
-        send_message(from_user_id, "No puedes banear al master o a un admin")
         return
     
     if user_id in banned_users:
         banned_users.remove(user_id)
-        action = "desbaneado"
     else:
         banned_users.append(user_id)
-        action = "baneado"
     
     save_banned()
-    send_message(from_user_id, f"Usuario {user_input} ha sido {action}")
 
 def handle_quote(message, chat_id, user_id):
     if is_banned(user_id):
-        send_message(chat_id, "Estás baneado del bot", message["message_id"])
         return
     
     if not is_friend(user_id) and user_id != BOT_MASTER_ID:
-        send_message(chat_id, "No tienes permiso para usar /quote", message["message_id"])
         return
     
     if "reply_to_message" not in message:
@@ -329,9 +339,84 @@ def handle_quote(message, chat_id, user_id):
     else:
         send_message(chat_id, "❌ Error al guardar el mensaje", message["message_id"])
 
+def handle_post(message, chat_id, user_id):
+    if is_banned(user_id):
+        return
+    
+    if not is_friend(user_id) and user_id != BOT_MASTER_ID:
+        return
+    
+    if not BOT_CHANNEL:
+        send_message(chat_id, "No hay canal configurado", message["message_id"])
+        return
+    
+    if "reply_to_message" not in message:
+        send_message(chat_id, "Este comando debe usarse en respuesta a un mensaje", message["message_id"])
+        return
+    
+    reply_msg = message["reply_to_message"]
+    from_chat_id = reply_msg["chat"]["id"]
+    msg_id = reply_msg["message_id"]
+    
+    result = copy_message(from_chat_id, msg_id, BOT_CHANNEL)
+    
+    if result and result.get("ok"):
+        first_name = message["from"].get("first_name", "Anónimo")
+        send_message(BOT_CHANNEL, f"By: {first_name}")
+        send_message(chat_id, "✅ Mensaje publicado en el canal", message["message_id"])
+        react_to_message(chat_id, message["message_id"], "👍")
+    else:
+        send_message(chat_id, "❌ Error al publicar el mensaje", message["message_id"])
+
+def handle_postdm(message, chat_id, user_id):
+    if is_banned(user_id):
+        return
+    
+    if not is_friend(user_id) and user_id != BOT_MASTER_ID:
+        return
+    
+    if "reply_to_message" not in message:
+        send_message(chat_id, "Este comando debe usarse en respuesta a un mensaje", message["message_id"])
+        return
+    
+    reply_msg = message["reply_to_message"]
+    from_chat_id = reply_msg["chat"]["id"]
+    msg_id = reply_msg["message_id"]
+    
+    chats = get_chats()
+    first_name = message["from"].get("first_name", "Anónimo")
+    sent_count = 0
+    
+    for chat in chats:
+        if chat != BOT_MASTER_ID:
+            result = copy_message(from_chat_id, msg_id, chat)
+            if result and result.get("ok"):
+                send_message(chat, f"By: {first_name}")
+                sent_count += 1
+            time.sleep(0.1)
+    
+    send_message(chat_id, f"✅ Mensaje enviado a {sent_count} chats", message["message_id"])
+    react_to_message(chat_id, message["message_id"], "👍")
+
+def handle_toggledm(message, chat_id, user_id):
+    global dm_enabled_users
+    
+    if is_banned(user_id):
+        return
+    
+    if user_id in dm_enabled_users:
+        dm_enabled_users.remove(user_id)
+        status = "desactivado"
+    else:
+        dm_enabled_users.append(user_id)
+        status = "activado"
+    
+    save_dm_settings()
+    send_message(chat_id, f"✅ Reenvío de mensajes {status}", message["message_id"])
+    react_to_message(chat_id, message["message_id"], "👍")
+
 def handle_random(message, chat_id, user_id):
     if is_banned(user_id):
-        send_message(chat_id, "Estás baneado del bot", message["message_id"])
         return
     
     if not quotes:
@@ -348,6 +433,17 @@ def handle_random(message, chat_id, user_id):
         quotes.remove(quote)
         save_quotes()
         send_message(chat_id, "El quote ya no está disponible")
+
+def handle_info(message, chat_id, user_id):
+    if is_banned(user_id):
+        return
+    
+    if not is_admin(user_id):
+        return
+    
+    chats = get_chats()
+    chat_count = len(chats)
+    send_message(chat_id, f"El bot tiene {chat_count} chats", message["message_id"])
 
 def handle_update(update):
     if "message" not in update:
@@ -381,8 +477,20 @@ def handle_update(update):
         elif text == "/quote":
             handle_quote(message, chat_id, user_id)
         
+        elif text == "/post":
+            handle_post(message, chat_id, user_id)
+        
+        elif text == "/postdm":
+            handle_postdm(message, chat_id, user_id)
+        
+        elif text == "/toggledm":
+            handle_toggledm(message, chat_id, user_id)
+        
         elif text == "/random":
             handle_random(message, chat_id, user_id)
+        
+        elif text == "/info":
+            handle_info(message, chat_id, user_id)
         
         elif text == "/help":
             help_text = (
@@ -391,7 +499,11 @@ def handle_update(update):
                 "/admin @usuario/ID - Gestionar admins (solo master)\n"
                 "/ban @usuario/ID - Banear/desbanear (admin+)\n"
                 "/quote - Guardar mensaje respondiendo (friends+)\n"
+                "/post - Publicar en canal respondiendo (friends+)\n"
+                "/postdm - Enviar a todos los chats respondiendo (friends+)\n"
+                "/toggledm - Activar/desactivar reenvío DM\n"
                 "/random - Quote aleatorio\n"
+                "/info - Información del bot (admin+)\n"
                 "/help - Esta ayuda"
             )
             send_message(chat_id, help_text)
