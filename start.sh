@@ -42,7 +42,7 @@ CMD="python3 bot.py \
 [ -n "$START_MSG" ] && CMD="$CMD -msg \"$START_MSG\""
 [ -n "$REPO" ] && CMD="$CMD -repo \"$REPO\""
 [ -n "$BARER" ] && CMD="$CMD -barer \"$BARER\""
-[ -n "$CHANEL" ] && CMD="$CMD -BC \"$CHANEL\""
+[ -n "$CHANEL" ] && CMD="$CMD -bc \"$CHANEL\""
 
 echo "🚀 Ejecutando: $CMD"
 eval "$CMD"
