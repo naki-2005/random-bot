@@ -27,6 +27,12 @@ if [ -z "$BARER" ]; then
   exit 1
 fi
 
+if [ -z "$CHANEL" ]; then
+  echo "❌ Debes definir CHANEL en el entorno (Formato: @canal,ID)."
+  exit 1
+fi
+
+
 START_MSG="${START_MSG:-}"
 
 CMD="python3 bot.py \
@@ -36,6 +42,7 @@ CMD="python3 bot.py \
 [ -n "$START_MSG" ] && CMD="$CMD -msg \"$START_MSG\""
 [ -n "$REPO" ] && CMD="$CMD -repo \"$REPO\""
 [ -n "$BARER" ] && CMD="$CMD -barer \"$BARER\""
+[ -n "$CHANEL" ] && CMD="$CMD -BC \"$CHANEL\""
 
 echo "🚀 Ejecutando: $CMD"
 eval "$CMD"
