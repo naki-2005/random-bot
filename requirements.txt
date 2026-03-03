@@ -3,3 +3,4 @@ cryptg
 cryptography
 pyaes
 rsa
+requests
