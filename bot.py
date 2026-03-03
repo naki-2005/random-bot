@@ -43,7 +43,7 @@ ADMINS_FILE = "admins.json"
 FRIENDS_FILE = "friends.json"
 QUOTES_FILE = "quotes.json"
 BANNED_FILE = "banned.json"
-DM_SETTINGS_FILE = "dm_settings.json"
+DM_DISABLED_FILE = "dm_disabled.json"
 
 def load_data(filename):
     if os.path.exists(filename):
@@ -119,9 +119,9 @@ def save_banned():
     save_data(BANNED_FILE, banned_users)
     save_to_github(BANNED_FILE, f"data/{BANNED_FILE}", "Actualización de banned")
 
-def save_dm_settings():
-    save_data(DM_SETTINGS_FILE, dm_enabled_users)
-    save_to_github(DM_SETTINGS_FILE, f"data/{DM_SETTINGS_FILE}", "Actualización de DM settings")
+def save_dm_disabled():
+    save_data(DM_DISABLED_FILE, dm_disabled_users)
+    save_to_github(DM_DISABLED_FILE, f"data/{DM_DISABLED_FILE}", "Actualización de DM disabled")
 
 admins = load_data(ADMINS_FILE)
 if BOT_MASTER_ID and BOT_MASTER_ID not in admins:
@@ -131,7 +131,7 @@ if BOT_MASTER_ID and BOT_MASTER_ID not in admins:
 friends = load_data(FRIENDS_FILE)
 quotes = load_data(QUOTES_FILE)
 banned_users = load_data(BANNED_FILE)
-dm_enabled_users = load_data(DM_SETTINGS_FILE)
+dm_disabled_users = load_data(DM_DISABLED_FILE)
 
 def is_admin(user_id):
     return user_id == BOT_MASTER_ID or user_id in admins
@@ -141,6 +141,9 @@ def is_friend(user_id):
 
 def is_banned(user_id):
     return user_id in banned_users
+
+def is_dm_disabled(user_id):
+    return user_id in dm_disabled_users
 
 def set_my_commands():
     if not TOKEN:
@@ -184,7 +187,7 @@ def forward_message(from_chat_id, message_id, original_chat_id, original_message
     if from_chat_id == BOT_MASTER_ID or is_banned(from_chat_id):
         react_to_message(original_chat_id, original_message_id, "🚫")
         return
-    if from_chat_id not in dm_enabled_users:
+    if is_dm_disabled(from_chat_id):
         react_to_message(original_chat_id, original_message_id, "🔇")
         return
     url = f"https://api.telegram.org/bot{TOKEN}/forwardMessage"
@@ -399,19 +402,19 @@ def handle_postdm(message, chat_id, user_id):
     react_to_message(chat_id, message["message_id"], "👍")
 
 def handle_toggledm(message, chat_id, user_id):
-    global dm_enabled_users
+    global dm_disabled_users
     
     if is_banned(user_id):
         return
     
-    if user_id in dm_enabled_users:
-        dm_enabled_users.remove(user_id)
-        status = "desactivado"
-    else:
-        dm_enabled_users.append(user_id)
+    if user_id in dm_disabled_users:
+        dm_disabled_users.remove(user_id)
         status = "activado"
+    else:
+        dm_disabled_users.append(user_id)
+        status = "desactivado"
     
-    save_dm_settings()
+    save_dm_disabled()
     send_message(chat_id, f"✅ Reenvío de mensajes {status}", message["message_id"])
     react_to_message(chat_id, message["message_id"], "👍")
 
