@@ -28,16 +28,27 @@ if [ -z "$BARER" ]; then
 fi
 
 if [ -z "$CHANEL" ]; then
-  echo "❌ Debes definir CHANEL en el entorno (Formato: @canal,ID)."
+  echo "❌ Debes definir CHANEL en el entorno (formato: @canal,ID)."
   exit 1
 fi
 
+if [ -z "$API_ID" ]; then
+  echo "❌ Debes definir API_ID en el entorno."
+  exit 1
+fi
+
+if [ -z "$API_HASH" ]; then
+  echo "❌ Debes definir API_HASH en el entorno."
+  exit 1
+fi
 
 START_MSG="${START_MSG:-}"
 
 CMD="python3 bot.py \
   -t \"$TOKEN\" \
-  -master \"$MASTER\""
+  -master \"$MASTER\" \
+  -api \"$API_ID\" \
+  -hash \"$API_HASH\""
 
 [ -n "$START_MSG" ] && CMD="$CMD -msg \"$START_MSG\""
 [ -n "$REPO" ] && CMD="$CMD -repo \"$REPO\""
